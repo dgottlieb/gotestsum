@@ -6,6 +6,7 @@ import (
 
 	"gotest.tools/gotestsum/cmd"
 	"gotest.tools/gotestsum/cmd/tool/matrix"
+	"gotest.tools/gotestsum/cmd/tool/reformat"
 	"gotest.tools/gotestsum/cmd/tool/slowest"
 	"gotest.tools/gotestsum/internal/log"
 )
@@ -69,6 +70,8 @@ Use '%[1]s COMMAND --help' for command specific help.
 		return nil
 	case "slowest":
 		return slowest.Run(name+" "+next, rest)
+	case "reformat":
+		return reformat.Run(name+" "+next, rest)
 	case "ci-matrix":
 		return matrix.Run(name+" "+next, rest)
 	default:

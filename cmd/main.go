@@ -144,6 +144,7 @@ Formats:
 
 Commands:
     %[1]s tool slowest   find or skip the slowest tests
+    %[1]s tool reformat  reformat an existing json file
     %[1]s help           print this help next
 `, name)
 }
