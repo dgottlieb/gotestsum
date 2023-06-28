@@ -25,6 +25,7 @@ type options struct {
 	outputFormat string
 	serialize    bool
 	debug        bool
+	onlyFailing  bool
 }
 
 func Run(name string, args []string) error {
@@ -37,8 +38,6 @@ func Run(name string, args []string) error {
 		return err
 	}
 	return run(opts)
-
-	return nil
 }
 
 func setupFlags(name string) (*pflag.FlagSet, *options) {
@@ -56,6 +55,8 @@ func setupFlags(name string) (*pflag.FlagSet, *options) {
 		"desired output format. E.g: `debug`, `standard-json`, `standard-quiet`")
 	flags.BoolVar(&opts.serialize, "serialize", false,
 		"serialize logs from parallel test runs")
+	flags.BoolVar(&opts.onlyFailing, "onlyFailing", false,
+		"only show logs for failing tests")
 	flags.BoolVar(&opts.debug, "debug", false,
 		"enable debug logging.")
 	return flags, opts
@@ -126,6 +127,7 @@ func format(inp io.Reader, opts *options) {
 	var filterRx *regexp.Regexp
 	testEvents := make([]testjson.TestEvent, 0)
 	firstEventPerTest := make(map[string]time.Time)
+	failedTests := make(map[string]bool)
 
 	if opts.filter != "" {
 		if opts.filter[0] == '!' {
@@ -151,42 +153,75 @@ func format(inp io.Reader, opts *options) {
 			}
 		}
 
-		if opts.serialize {
+		if event.Action == testjson.ActionFail {
+			failedTests[event.Test] = true
+		}
+
+		if opts.serialize || opts.onlyFailing {
 			testEvents = append(testEvents, event)
-			if _, exists := firstEventPerTest[event.Test]; !exists {
+			// Track the time of the first log line for each test. This is used to sort logs keeping
+			// adjacent test logs next to each other without interleaving with other test logs.
+			if _, exists := firstEventPerTest[event.Test]; opts.serialize && !exists {
 				firstEventPerTest[event.Test] = event.Time
 			}
 			continue
 		}
 
+		// There were no options that require buffering input. We can just write the results immediately.
 		writer.Format(event, nil)
 	}
 
-	if opts.serialize {
-		sort.Stable(TestComparator{testEvents, firstEventPerTest})
-		for idx := 0; idx < len(testEvents); idx++ {
-			event := testEvents[idx]
-			// fmt.Printf("DBG. Action: %v\n", event.Action)
-			// fmt.Printf("\t%+v\n", event)
-			/*
-				The code I wanted to write:
-						if event.Action == testjson.ActionPause ||
-							event.Action == testjson.ActionCont {
-							continue
-						}
-			*/
+	if len(testEvents) == 0 {
+		// We didn't use any features that required buffering events.
+		return
+	}
 
-			if event.Action == "output" &&
-				(strings.HasPrefix(event.Output, "=== PAUSE") ||
-					strings.HasPrefix(event.Output, "=== CONT")) {
+	if opts.serialize {
+		// All logs for a single test have the same timestamp key. Use a stable sort such that the
+		// logs for a given test are kept in the relative order they appear.
+		sort.Stable(TestComparator{testEvents, firstEventPerTest})
+	}
+
+	pausedTests := make(map[string]bool)
+	for idx := 0; idx < len(testEvents); idx++ {
+		event := testEvents[idx]
+
+		if event.Test == "" || opts.onlyFailing && !failedTests[event.Test] {
+			// Lines without a `event.Test` field that we want to skip over:
+			//   {"Time":"2023-06-27T19:00:41.047964705Z","Action":"output","Package":"go.viam.com/rdk/components/board/genericlinux","Output":"PASS\n"}
+			//   {"Time":"2023-06-27T19:00:41.054056699Z","Action":"output","Package":"go.viam.com/rdk/components/board/genericlinux","Output":"coverage: 17.1% of statements\n"}
+			//   {"Time":"2023-06-27T19:00:41.068046269Z","Action":"output","Package":"go.viam.com/rdk/components/board/genericlinux","Output":"ok  \tgo.viam.com/rdk/components/board/genericlinux\t0.234s\tcoverage: 17.1% of statements\n"}
+			continue
+		}
+
+		if opts.serialize && event.Action == "output" {
+			// The `=== PAUSE` and CONT log lines with the `output` action come some time after the
+			// `ActionPause` and `ActionCont` json events.
+			if strings.HasPrefix(event.Output, "=== PAUSE") ||
+				strings.HasPrefix(event.Output, "=== CONT") {
+				// When the logs are serialized, the log lines have little meaning. Knowing there
+				// was a pause due to scheduling could be interesting. But a bunch of consecutive
+				// pause->cont log lines without any test logs between them are of little diagnostic
+				// value.
+				if !pausedTests[event.Test] {
+					fmt.Println("=== Paused")
+				}
+				pausedTests[event.Test] = true
 				continue
 			}
-
-			writer.Format(event, nil)
 		}
+
+		if event.Action == "output" {
+			// Only flip this when we actually output a test log line.
+			pausedTests[event.Test] = false
+		}
+
+		writer.Format(event, nil)
 	}
 }
 
+// Copied from `testjson/execution.go` with one edit. `TestEvent has a private `raw` field, our copy
+// will not set that field.
 func parseEvent(raw []byte) (testjson.TestEvent, error) {
 	// TODO: this seems to be a bug in the `go test -json` output
 	if bytes.HasPrefix(raw, []byte("FAIL")) {

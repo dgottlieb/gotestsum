@@ -57,6 +57,7 @@ func toolRun(name string, args []string) error {
 
 Commands:
     %[1]s slowest      find or skip the slowest tests
+    %[1]s reformat     takes the json output from a test run and reformats it with some additional functionality
     %[1]s ci-matrix    use previous test runtime to place packages into optimal buckets
 
 Use '%[1]s COMMAND --help' for command specific help.
