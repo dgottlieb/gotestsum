@@ -144,7 +144,7 @@ Formats:
 
 Commands:
     %[1]s tool slowest   find or skip the slowest tests
-    %[1]s reformat       takes the json output from a test run and reformats it with some additional functionality
+    %[1]s tool reformat  takes the json output from a test run and reformats it with some additional functionality
     %[1]s help           print this help next
 `, name)
 }
